@@ -5,7 +5,11 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync/atomic"
 )
+
+// active tracks the number of currently open connections.
+var active int64
 
 func main() {
 	port := flag.String("port", "8080", "TCP port to listen on")
@@ -32,10 +36,16 @@ func main() {
 
 func handleConn(conn net.Conn) {
 	defer conn.Close()
-	log.Printf("connection from %s", conn.RemoteAddr())
+
+	n := atomic.AddInt64(&active, 1)
+	log.Printf("connection from %s (active: %d)", conn.RemoteAddr(), n)
+	defer func() {
+		n := atomic.AddInt64(&active, -1)
+		log.Printf("connection %s closed (active: %d)", conn.RemoteAddr(), n)
+	}()
 
 	// Echo whatever the client sends back to it.
 	if _, err := io.Copy(conn, conn); err != nil {
-		log.Printf("connection %s closed: %v", conn.RemoteAddr(), err)
+		log.Printf("connection %s error: %v", conn.RemoteAddr(), err)
 	}
 }
