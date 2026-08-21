@@ -1,0 +1,40 @@
+[Unit]
+Description=hrisa daemon (local-socket command server)
+Documentation=man:hrisa(8)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hrisa
+Restart=on-failure
+RestartSec=2
+
+# Run with the supplementary group "hrisa" so the socket it creates is owned
+# root:hrisa. The daemon chmods the socket to 0660, so any user added to the
+# "hrisa" group can use hrisactl without sudo. (Create the group + add your
+# user at install time; see install.sh / the README.)
+Group=hrisa
+
+# The daemon creates its socket under /run/hrisa via RuntimeDirectory, which
+# systemd creates on start and cleans up on stop. Mode 0750 lets group members
+# traverse the directory to reach the socket.
+RuntimeDirectory=hrisa
+RuntimeDirectoryMode=0750
+Environment=HRISA_SOCKET=/run/hrisa/hrisa.sock
+
+# Hardening: the daemon only needs its runtime dir and the loopback-less local
+# socket, so lock the rest of the system down.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
