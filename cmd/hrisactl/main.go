@@ -88,15 +88,15 @@ func main() {
 func repl(conn net.Conn, r *bufio.Reader, socket string, timeout time.Duration) {
 	fmt.Printf("%s %s - connected to %s\n",
 		col(cBold+cGreen, "hrisactl"), col(cBold, version), col(cCyan, socket))
-	fmt.Println(col(cGray, "type 'help' for commands, \"use <string>\" to set context, 'quit' to exit"))
+	fmt.Println(col(cGray, "type 'help' for commands, 'use <string>' to set context (up to 2 levels), 'back' to pop, 'quit' to exit"))
 
-	// context holds the string set via `use '<string>'`. When non-empty it is
-	// shown in the prompt between parentheses, e.g. "(target-1) > ".
-	context := ""
+	// levels holds the context stack set via `use <string>`, up to maxLevels
+	// deep. It is shown in the prompt joined by "/", e.g. "(target-1/eth0) > ".
+	var levels []string
 
 	in := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print(prompt(context))
+		fmt.Print(prompt(levels))
 		if !in.Scan() {
 			// EOF (Ctrl-D) or a read error: exit. Report a genuine error;
 			// a plain EOF (in.Err() == nil) is a clean exit.
@@ -122,17 +122,27 @@ func repl(conn net.Conn, r *bufio.Reader, socket string, timeout time.Duration) 
 			fmt.Print("\033[2J\033[H")
 			continue
 		case "use":
-			// Save everything after "use" (quotes stripped) as the context.
-			context = unquote(strings.TrimSpace(strings.TrimPrefix(line, fields[0])))
-			if context == "" {
-				fmt.Println(col(cYellow, "context cleared"))
+			// Push a new context level (quotes optional). With no argument,
+			// pop the deepest level. Depth is capped at maxLevels; using at
+			// max replaces the deepest level rather than nesting further.
+			arg := unquote(strings.TrimSpace(strings.TrimPrefix(line, fields[0])))
+			if arg == "" {
+				levels = popLevel(levels)
+			} else if len(levels) < maxLevels {
+				levels = append(levels, arg)
 			} else {
-				fmt.Printf("using %s\n", col(cBold+cCyan, context))
+				levels[len(levels)-1] = arg
 			}
+			announceContext(levels)
+			continue
+		case "back":
+			// Pop the deepest context level.
+			levels = popLevel(levels)
+			announceContext(levels)
 			continue
 		}
 
-		req := ipc.Request{Command: fields[0], Args: fields[1:]}
+		req := ipc.Request{Command: fields[0], Args: fields[1:], Context: strings.Join(levels, "/")}
 
 		conn.SetDeadline(time.Now().Add(timeout))
 		if err := send(conn, r, req); err != nil {
@@ -148,14 +158,39 @@ func repl(conn net.Conn, r *bufio.Reader, socket string, timeout time.Duration) 
 	}
 }
 
-// prompt renders the input prompt, including the saved context when set.
-func prompt(context string) string {
+// maxLevels is how deep the `use` context stack may go.
+const maxLevels = 2
+
+// prompt renders the input prompt, including the saved context levels when set,
+// e.g. "(target-1/eth0) > ".
+func prompt(levels []string) string {
 	arrow := col(cBold+cGreen, ">")
-	if context != "" {
-		return fmt.Sprintf("%s%s%s %s ",
-			col(cGray, "("), col(cBold+cCyan, context), col(cGray, ")"), arrow)
+	if len(levels) == 0 {
+		return arrow + " "
 	}
-	return arrow + " "
+	parts := make([]string, len(levels))
+	for i, l := range levels {
+		parts[i] = col(cBold+cCyan, l)
+	}
+	inner := strings.Join(parts, col(cGray, "/"))
+	return fmt.Sprintf("%s%s%s %s ", col(cGray, "("), inner, col(cGray, ")"), arrow)
+}
+
+// popLevel removes the deepest context level, if any.
+func popLevel(levels []string) []string {
+	if len(levels) == 0 {
+		return levels
+	}
+	return levels[:len(levels)-1]
+}
+
+// announceContext prints the current context path after a use/back change.
+func announceContext(levels []string) {
+	if len(levels) == 0 {
+		fmt.Println(col(cYellow, "context cleared"))
+		return
+	}
+	fmt.Printf("using %s\n", col(cBold+cCyan, strings.Join(levels, "/")))
 }
 
 // unquote strips a single pair of surrounding single or double quotes, so
@@ -201,8 +236,9 @@ usage:
 
 starts an interactive prompt (>). type daemon commands like 'status', 'ping',
 'stats', 'version', 'echo ...', 'shutdown', or 'help'. client-side commands:
-"use '<string>'" (save a context shown as "(<string>) > "; run 'use' with no
-argument to clear it), 'clear', and 'quit'/'exit' (or Ctrl-D) to leave.
+'use <string>' (push a context level, up to 2, shown as "(a/b) > "; run 'use'
+or 'back' with no argument to pop a level), 'clear', and 'quit'/'exit' (or
+Ctrl-D) to leave.
 
 flags:
 `)

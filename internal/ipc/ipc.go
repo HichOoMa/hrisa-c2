@@ -31,6 +31,10 @@ const SocketEnv = "HRISA_SOCKET"
 type Request struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
+	// Context is the active context set client-side via `use <string>`. It is
+	// sent with every command so the daemon can behave differently when a
+	// context is active (empty means no context).
+	Context string `json:"context,omitempty"`
 }
 
 // Response is the daemon's reply to a Request.

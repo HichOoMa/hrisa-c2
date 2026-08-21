@@ -143,9 +143,18 @@ func (s *Server) handleConn(conn net.Conn) {
 }
 
 // dispatch maps a request to a response. Add new commands here.
+//
+// req.Context carries the client's active `use <string>` context. Commands
+// behave differently when it is set, so the same command run under a context
+// is not the same as run bare.
 func (s *Server) dispatch(req ipc.Request) ipc.Response {
+	ctx := strings.TrimSpace(req.Context)
+	fmt.Printf("dispatch: command=%q context=%q args=%v\n", req.Command, ctx, req.Args)
 	switch strings.ToLower(strings.TrimSpace(req.Command)) {
 	case "ping":
+		if ctx != "" {
+			return ipc.Response{OK: true, Data: "pong from " + ctx}
+		}
 		return ipc.Response{OK: true, Data: "pong"}
 
 	case "version":
@@ -153,10 +162,14 @@ func (s *Server) dispatch(req ipc.Request) ipc.Response {
 
 	case "status":
 		uptime := time.Since(s.startedAt).Round(time.Second)
+		target := "(none)"
+		if ctx != "" {
+			target = ctx
+		}
 		data := fmt.Sprintf(
-			"pid:        %d\nsocket:     %s\nuptime:     %s\nactive:     %d\nhandled:    %d\nversion:    %s",
+			"pid:        %d\nsocket:     %s\nuptime:     %s\nactive:     %d\nhandled:    %d\ncontext:    %s\nversion:    %s",
 			os.Getpid(), s.socketPath, uptime,
-			atomic.LoadInt64(&s.active), atomic.LoadInt64(&s.total), Version,
+			atomic.LoadInt64(&s.active), atomic.LoadInt64(&s.total), target, Version,
 		)
 		return ipc.Response{OK: true, Data: data}
 
@@ -166,7 +179,11 @@ func (s *Server) dispatch(req ipc.Request) ipc.Response {
 		return ipc.Response{OK: true, Data: data}
 
 	case "echo":
-		return ipc.Response{OK: true, Data: strings.Join(req.Args, " ")}
+		msg := strings.Join(req.Args, " ")
+		if ctx != "" {
+			msg = "[" + ctx + "] " + msg
+		}
+		return ipc.Response{OK: true, Data: msg}
 
 	case "shutdown":
 		return ipc.Response{OK: true, Data: "shutting down"}
