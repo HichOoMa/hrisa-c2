@@ -20,9 +20,10 @@ import (
 
 // Server owns the listening socket and per-connection state.
 type Server struct {
-	socketPath string
-	listener   net.Listener
-	startedAt  time.Time
+	socketPath  string
+	connections map[string]net.Conn
+	listener    net.Listener
+	startedAt   time.Time
 
 	// active tracks the number of currently open client connections.
 	active int64
@@ -33,10 +34,11 @@ type Server struct {
 }
 
 // New creates a Server bound to socketPath (the socket is not opened yet).
-func New(socketPath string) *Server {
+func New(socketPath string, connections map[string]net.Conn) *Server {
 	return &Server{
-		socketPath: socketPath,
-		shutdown:   make(chan struct{}),
+		socketPath:  socketPath,
+		connections: connections,
+		shutdown:    make(chan struct{}),
 	}
 }
 
@@ -148,55 +150,63 @@ func (s *Server) handleConn(conn net.Conn) {
 // behave differently when it is set, so the same command run under a context
 // is not the same as run bare.
 func (s *Server) dispatch(req ipc.Request) ipc.Response {
-	ctx := strings.TrimSpace(req.Context)
-	fmt.Printf("dispatch: command=%q context=%q args=%v\n", req.Command, ctx, req.Args)
-	switch strings.ToLower(strings.TrimSpace(req.Command)) {
-	case "ping":
-		if ctx != "" {
-			return ipc.Response{OK: true, Data: "pong from " + ctx}
-		}
-		return ipc.Response{OK: true, Data: "pong"}
-
-	case "version":
-		return ipc.Response{OK: true, Data: Version}
-
-	case "status":
-		uptime := time.Since(s.startedAt).Round(time.Second)
-		target := "(none)"
-		if ctx != "" {
-			target = ctx
-		}
-		data := fmt.Sprintf(
-			"pid:        %d\nsocket:     %s\nuptime:     %s\nactive:     %d\nhandled:    %d\ncontext:    %s\nversion:    %s",
-			os.Getpid(), s.socketPath, uptime,
-			atomic.LoadInt64(&s.active), atomic.LoadInt64(&s.total), target, Version,
-		)
-		return ipc.Response{OK: true, Data: data}
-
-	case "stats":
-		data := fmt.Sprintf("active=%d handled=%d",
-			atomic.LoadInt64(&s.active), atomic.LoadInt64(&s.total))
-		return ipc.Response{OK: true, Data: data}
-
-	case "echo":
-		msg := strings.Join(req.Args, " ")
-		if ctx != "" {
-			msg = "[" + ctx + "] " + msg
-		}
-		return ipc.Response{OK: true, Data: msg}
-
-	case "shutdown":
-		return ipc.Response{OK: true, Data: "shutting down"}
-
-	case "help":
-		return ipc.Response{OK: true, Data: helpText}
-
+	switch strings.ToLower(strings.TrimSpace(req.IP)) {
 	case "":
-		return ipc.Response{OK: false, Error: "empty command"}
+		switch strings.ToLower(strings.TrimSpace(req.Command)) {
+		case "ls":
+			return ipc.Response{OK: true, Data: s.ls()}
+		case "ping":
+			return ipc.Response{OK: true, Data: "pong"}
 
+		case "version":
+			return ipc.Response{OK: true, Data: Version}
+
+		case "status":
+			uptime := time.Since(s.startedAt).Round(time.Second)
+			data := fmt.Sprintf(
+				"pid:        %d\nsocket:     %s\nuptime:     %s\nactive:     %d\nhandled:    %d\nversion:    %s",
+				os.Getpid(), s.socketPath, uptime,
+				atomic.LoadInt64(&s.active), atomic.LoadInt64(&s.total), Version,
+			)
+			return ipc.Response{OK: true, Data: data}
+
+		case "stats":
+			data := fmt.Sprintf("active=%d handled=%d",
+				atomic.LoadInt64(&s.active), atomic.LoadInt64(&s.total))
+			return ipc.Response{OK: true, Data: data}
+
+		case "echo":
+			msg := strings.Join(req.Args, " ")
+			return ipc.Response{OK: true, Data: msg}
+
+		case "shutdown":
+			return ipc.Response{OK: true, Data: "shutting down"}
+
+		case "help":
+			return ipc.Response{OK: true, Data: helpText}
+
+		case "":
+			return ipc.Response{OK: false, Error: "empty command"}
+
+		default:
+			return ipc.Response{OK: false, Error: fmt.Sprintf("unknown command %q (try 'help')", req.Command)}
+		}
 	default:
-		return ipc.Response{OK: false, Error: fmt.Sprintf("unknown command %q (try 'help')", req.Command)}
+		if net.ParseIP(req.IP) == nil {
+			return ipc.Response{OK: false, Error: fmt.Sprintf("invalid IP address %q", req.IP)}
+		} else {
+			// TODO implement context-specific commands here. For now, just reject any command under a context.
+			return ipc.Response{OK: false, Error: fmt.Sprintf("unknown command %q under context %q (try 'help')", req.Command, req.IP)}
+		}
 	}
+}
+
+func (s *Server) ls() string {
+	connections := make([]string, 0, len(s.connections))
+	for ip := range s.connections {
+		connections = append(connections, ip)
+	}
+	return strings.Join(connections, "\n")
 }
 
 // Version is the daemon/protocol version, overridable at build time via

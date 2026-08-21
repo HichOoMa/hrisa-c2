@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"hrisa.com/internal/ipc"
+	"hrisa.com/utils"
 )
 
 const version = "0.1.0"
@@ -122,13 +123,17 @@ func repl(conn net.Conn, r *bufio.Reader, socket string, timeout time.Duration) 
 			fmt.Print("\033[2J\033[H")
 			continue
 		case "use":
-			// Push a new context level (quotes optional). With no argument,
-			// pop the deepest level. Depth is capped at maxLevels; using at
-			// max replaces the deepest level rather than nesting further.
 			arg := unquote(strings.TrimSpace(strings.TrimPrefix(line, fields[0])))
 			if arg == "" {
 				levels = popLevel(levels)
-			} else if len(levels) < maxLevels {
+			} else if len(levels) == 0 {
+				if net.ParseIP(arg) != nil {
+					levels = append(levels, arg)
+				} else {
+					fmt.Fprintf(os.Stderr, "hrisactl: invalid IP address: %q\n", arg)
+					continue
+				}
+			} else if len(levels) == 1 {
 				levels = append(levels, arg)
 			} else {
 				levels[len(levels)-1] = arg
@@ -142,7 +147,7 @@ func repl(conn net.Conn, r *bufio.Reader, socket string, timeout time.Duration) 
 			continue
 		}
 
-		req := ipc.Request{Command: fields[0], Args: fields[1:], Context: strings.Join(levels, "/")}
+		req := ipc.Request{Command: fields[0], Args: fields[1:], IP: utils.At(levels, 0), Mode: utils.At(levels, 1)}
 
 		conn.SetDeadline(time.Now().Add(timeout))
 		if err := send(conn, r, req); err != nil {
